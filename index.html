@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#111418">
+<title>Lap Timer</title>
+<style>
+  :root {
+    --bg-setup: #111418;
+    --bg-run: #1565c0;
+    --bg-over: #c62828;
+    --fg: #ffffff;
+    --tile: rgba(255,255,255,.06);
+    --tile-hover: rgba(255,255,255,.12);
+    --muted: rgba(255,255,255,.45);
+    /* grid unit: one square cell. 5 columns wide, ~5.8 units tall incl. gaps */
+    --u: min(16.5vw, 14.5vh);
+    --g: calc(var(--u) * .12);
+    --r: calc(var(--u) * .14);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg-setup);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: manipulation;
+  }
+  body { transition: background-color .45s ease; }
+  body.run  { background: var(--bg-run); }
+  body.over { background: var(--bg-over); }
+
+  .screen {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; transform: scale(.96);
+    pointer-events: none;
+    transition: opacity .3s ease, transform .3s ease;
+  }
+  .screen.active { opacity: 1; transform: scale(1); pointer-events: auto; }
+
+  .num { font-variant-numeric: tabular-nums; font-weight: 700; letter-spacing: -.02em; }
+
+  /* ---------- setup: square grid ---------- */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(5, var(--u));
+    grid-template-rows: calc(var(--u) * .6) calc(var(--u) * 1.7) calc(var(--u) * .6) var(--u) var(--u);
+    gap: var(--g);
+  }
+  .tile {
+    display: grid; place-items: center;
+    background: var(--tile);
+    border: none; border-radius: var(--r);
+    color: var(--fg); font: inherit;
+    cursor: pointer;
+    transition: background .15s, transform .1s, box-shadow .15s;
+  }
+  .tile:hover { background: var(--tile-hover); }
+  .tile:active { transform: scale(.94); }
+
+  .step { color: var(--muted); font-size: calc(var(--u) * .28); }
+  .step:hover { color: var(--fg); }
+  .up-m   { grid-area: 1 / 1 / 2 / 3; }
+  .up-s   { grid-area: 1 / 4 / 2 / 6; }
+  .down-m { grid-area: 3 / 1 / 4 / 3; }
+  .down-s { grid-area: 3 / 4 / 4 / 6; }
+
+  .digits {
+    display: flex; align-items: center; justify-content: center;
+    font-size: calc(var(--u) * 1.35);
+    line-height: 1;
+    cursor: text;
+  }
+  .digits:active { transform: none; }
+  #mm { grid-area: 2 / 1 / 3 / 3; }
+  #ss { grid-area: 2 / 4 / 3 / 6; }
+  .colon {
+    grid-area: 2 / 3 / 3 / 4;
+    display: grid; place-items: center;
+    font-size: calc(var(--u) * 1.1); line-height: 1;
+    opacity: .5; padding-bottom: .12em;
+  }
+  /* typing mode: highlight digit tiles */
+  .grid.typing .digits { box-shadow: inset 0 0 0 calc(var(--u) * .04) var(--bg-run); }
+  .digits .dim { opacity: .3; }
+
+  .preset { grid-row: 4; font-size: calc(var(--u) * .36); font-weight: 600; }
+  .preset.sel { background: rgba(21,101,192,.45); }
+
+  #start {
+    grid-area: 5 / 1 / 6 / 6;
+    background: var(--bg-run);
+  }
+  #start:hover { background: #1976d2; }
+  #start svg { width: calc(var(--u) * .42); height: calc(var(--u) * .42); fill: currentColor; transform: translateX(6%); }
+
+  /* hidden input: brings up numeric keypad on touch devices */
+  #kb {
+    position: fixed; left: 0; bottom: 0;
+    width: 1px; height: 1px; opacity: 0;
+    border: 0; padding: 0; font-size: 16px;
+  }
+
+  /* ---------- run ---------- */
+  #run { cursor: pointer; }
+  #time {
+    font-size: min(30vw, 55vh);
+    line-height: 1;
+    white-space: nowrap;
+  }
+  #time.pulse { animation: pulse .35s ease-out; }
+  @keyframes pulse {
+    0%   { transform: scale(.82); opacity: .2; }
+    100% { transform: scale(1);   opacity: 1; }
+  }
+  #flash {
+    position: fixed; inset: 0; background: #fff;
+    opacity: 0; pointer-events: none;
+  }
+  #flash.go { animation: flash .35s ease-out; }
+  @keyframes flash { 0% { opacity: .35; } 100% { opacity: 0; } }
+
+  #hold {
+    position: fixed; left: 50%; bottom: 7vh;
+    width: 56px; height: 56px; margin-left: -28px;
+    opacity: 0; transition: opacity .15s; pointer-events: none;
+  }
+  #hold.on { opacity: 1; }
+  #hold rect { fill: none; stroke: rgba(255,255,255,.85); stroke-width: 5;
+    stroke-dasharray: 180; stroke-dashoffset: 180; }
+  #hold.on rect { transition: stroke-dashoffset .7s linear; stroke-dashoffset: 0; }
+
+  #exit {
+    position: fixed; top: 14px; right: 14px;
+    width: 44px; height: 44px; border: none; border-radius: 10px;
+    background: transparent; color: rgba(255,255,255,.25);
+    font-size: 26px; line-height: 44px; cursor: pointer;
+    transition: color .2s, background .2s;
+  }
+  #exit:hover { color: #fff; background: rgba(0,0,0,.15); }
+</style>
+</head>
+<body>
+
+<!-- SETUP -->
+<section id="setup" class="screen active">
+  <div class="grid" id="grid">
+    <button class="tile step up-m"   data-d="60"  aria-label="분 +">▲</button>
+    <button class="tile step up-s"   data-d="10"  aria-label="초 +">▲</button>
+    <div class="tile digits num" id="mm">05</div>
+    <div class="colon num">:</div>
+    <div class="tile digits num" id="ss">00</div>
+    <button class="tile step down-m" data-d="-60" aria-label="분 -">▼</button>
+    <button class="tile step down-s" data-d="-10" aria-label="초 -">▼</button>
+
+    <button class="tile preset num" data-p="60">1</button>
+    <button class="tile preset num" data-p="180">3</button>
+    <button class="tile preset num" data-p="300">5</button>
+    <button class="tile preset num" data-p="600">10</button>
+    <button class="tile preset num" data-p="900">15</button>
+
+    <button class="tile" id="start" aria-label="시작"><svg viewBox="0 0 24 24"><path d="M6 4l15 8-15 8z"/></svg></button>
+  </div>
+  <input id="kb" type="text" inputmode="numeric" autocomplete="off" aria-label="시간 입력">
+</section>
+
+<!-- RUN -->
+<section id="run" class="screen">
+  <div id="time" class="num">5:00</div>
+  <button id="exit" aria-label="설정으로">×</button>
+</section>
+
+<div id="flash"></div>
+<svg id="hold" viewBox="0 0 56 56"><rect x="6" y="6" width="44" height="44" rx="8"/></svg>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const body = document.body;
+  const setup = $('setup'), run = $('run'), grid = $('grid');
+  const mmEl = $('mm'), ssEl = $('ss'), kb = $('kb'), timeEl = $('time');
+  const flash = $('flash'), hold = $('hold');
+
+  const STORE = 'lapTimer.duration';
+  const MAX = 99 * 60 + 59;
+  const pad = n => String(n).padStart(2, '0');
+
+  // ---------- setup state ----------
+  // `digits` holds up to 4 typed digits (MMSS, filled from the right, microwave style).
+  // `typing` = false means the next digit starts a fresh entry.
+  let digits = '0500';
+  let typing = false;
+
+  const clampSec = s => Math.max(0, Math.min(MAX, s));
+  const toDigits = sec => pad(Math.floor(sec / 60)) + pad(sec % 60);
+  function durationFromDigits() {
+    const d = digits.padStart(4, '0');
+    return clampSec(parseInt(d.slice(0, 2), 10) * 60 + parseInt(d.slice(2), 10));
+  }
+
+  function render() {
+    const d = digits.padStart(4, '0');
+    if (typing) {
+      // dim the leading zeros that haven't been typed yet
+      const typed = digits.length;
+      const html = [...d].map((c, i) => i < 4 - typed ? `<span class="dim">${c}</span>` : c);
+      mmEl.innerHTML = html[0] + html[1];
+      ssEl.innerHTML = html[2] + html[3];
+    } else {
+      mmEl.textContent = d.slice(0, 2);
+      ssEl.textContent = d.slice(2);
+    }
+    grid.classList.toggle('typing', typing);
+    const sec = durationFromDigits();
+    document.querySelectorAll('.preset').forEach(b => b.classList.toggle('sel', !typing && +b.dataset.p === sec));
+  }
+  function setSeconds(sec) { digits = toDigits(clampSec(sec)); typing = false; render(); }
+
+  function typeDigit(c) {
+    if (!typing) { digits = ''; typing = true; }
+    digits = (digits + c).replace(/^0+/, '').slice(-4);
+    render();
+  }
+  function backspace() {
+    if (!typing) { digits = ''; typing = true; }
+    else digits = digits.slice(0, -1);
+    render();
+  }
+  function commitTyping() { if (typing) setSeconds(durationFromDigits()); }
+
+  try { const v = parseInt(localStorage.getItem(STORE), 10); if (v > 0) digits = toDigits(clampSec(v)); } catch (e) {}
+  render();
+
+  document.querySelectorAll('.step').forEach(b => b.addEventListener('click', () => {
+    setSeconds(durationFromDigits() + +b.dataset.d);
+  }));
+  document.querySelectorAll('.preset').forEach(b => b.addEventListener('click', () => setSeconds(+b.dataset.p)));
+  $('start').addEventListener('click', start);
+
+  // tapping the digits opens the numeric keypad on touch devices
+  [mmEl, ssEl].forEach(el => el.addEventListener('click', () => {
+    kb.value = ''; kb.focus({ preventScroll: true });
+    if (!typing) { digits = ''; typing = true; render(); }
+  }));
+  kb.addEventListener('input', () => {
+    for (const c of kb.value) if (c >= '0' && c <= '9') typeDigit(c);
+    kb.value = '';
+  });
+  kb.addEventListener('blur', commitTyping);
+
+  // ---------- run state ----------
+  let duration = 300, startAt = 0, running = false;
+  let raf = 0, lastText = '', over = false, wakeLock = null;
+
+  const fmt = t => Math.floor(t / 60) + ':' + pad(t % 60);
+
+  function tick() {
+    const remain = duration - (performance.now() - startAt) / 1000;
+    const isOver = remain <= 0;
+    const text = isOver ? '−' + fmt(Math.floor(-remain)) : fmt(Math.ceil(remain));
+    if (text !== lastText) { timeEl.textContent = text; lastText = text; }
+    if (isOver !== over) {
+      over = isOver;
+      body.classList.toggle('over', over);
+      body.classList.toggle('run', !over);
+    }
+    raf = requestAnimationFrame(tick);
+  }
+
+  function start() {
+    const d = durationFromDigits();
+    if (d <= 0) return;
+    setSeconds(d);   // normalise e.g. 1:90 -> 2:30
+    duration = d;
+    try { localStorage.setItem(STORE, d); } catch (e) {}
+    if (document.activeElement) document.activeElement.blur();
+    setup.classList.remove('active');
+    run.classList.add('active');
+    running = true;
+    requestWake();
+    restart(false);
+  }
+
+  function restart(animate = true) {
+    startAt = performance.now();
+    over = false; lastText = '';
+    body.classList.remove('over');
+    body.classList.add('run');
+    cancelAnimationFrame(raf);
+    tick();
+    if (animate) {
+      timeEl.classList.remove('pulse'); flash.classList.remove('go');
+      void timeEl.offsetWidth;
+      timeEl.classList.add('pulse'); flash.classList.add('go');
+    }
+  }
+
+  function stop() {
+    running = false;
+    cancelAnimationFrame(raf);
+    body.classList.remove('run', 'over');
+    run.classList.remove('active');
+    setup.classList.add('active');
+    releaseWake();
+  }
+
+  // ---------- pointer while running ----------
+  let holdTimer = 0;
+  run.addEventListener('pointerdown', e => {
+    if (e.target.id === 'exit') return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    restart();
+    hold.classList.add('on');
+    holdTimer = setTimeout(() => { hold.classList.remove('on'); stop(); }, 700);
+  });
+  const cancelHold = () => { clearTimeout(holdTimer); hold.classList.remove('on'); };
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => run.addEventListener(t, cancelHold));
+  $('exit').addEventListener('click', e => { e.stopPropagation(); stop(); });
+  run.addEventListener('contextmenu', e => e.preventDefault());
+
+  // ---------- keyboard ----------
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (running) {
+      if (e.code === 'Space' || e.key === 'Enter') {
+        e.preventDefault();
+        if (!e.repeat) restart();
+      } else if (e.key === 'Escape') {
+        stop();
+      }
+      return;
+    }
+    if (/^[0-9]$/.test(e.key)) { e.preventDefault(); typeDigit(e.key); }
+    else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); backspace(); }
+    else if (e.key === 'Escape') { e.preventDefault(); commitTyping(); kb.blur(); }
+    else if (e.key === 'Enter' || (e.code === 'Space' && !e.repeat)) { e.preventDefault(); start(); }
+    else if (e.key === 'ArrowUp')    { e.preventDefault(); setSeconds(durationFromDigits() + 60); }
+    else if (e.key === 'ArrowDown')  { e.preventDefault(); setSeconds(durationFromDigits() - 60); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); setSeconds(durationFromDigits() + 10); }
+    else if (e.key === 'ArrowLeft')  { e.preventDefault(); setSeconds(durationFromDigits() - 10); }
+  });
+
+  // ---------- keep screen on ----------
+  async function requestWake() {
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  }
+  function releaseWake() { try { wakeLock && wakeLock.release(); } catch (e) {} wakeLock = null; }
+  document.addEventListener('visibilitychange', () => {
+    if (running && document.visibilityState === 'visible') requestWake();
+  });
+})();
+</script>
+</body>
+</html>
